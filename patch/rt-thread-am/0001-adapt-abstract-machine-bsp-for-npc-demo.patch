@@ -1,0 +1,118 @@
+From cb99b612bdf4419fec373638cd72382404c7ce95 Mon Sep 17 00:00:00 2001
+From: 2023K8009929006-TianqiXu <xutianqi23@mails.ucas.ac.cn>
+Date: Wed, 8 Jul 2026 06:24:30 +0800
+Subject: [PATCH] adapt abstract-machine bsp for npc demo
+
+---
+ bsp/abstract-machine/Makefile             |  2 +
+ bsp/abstract-machine/integrate-am-apps.py |  1 -
+ bsp/abstract-machine/src/context.c        | 45 ++++++++++++++++++++---
+ 3 files changed, 41 insertions(+), 7 deletions(-)
+
+diff --git a/bsp/abstract-machine/Makefile b/bsp/abstract-machine/Makefile
+index 8d70f31..b950d49 100644
+--- a/bsp/abstract-machine/Makefile
++++ b/bsp/abstract-machine/Makefile
+@@ -8,6 +8,7 @@ NAME = rtthread
+ SRCS = $(shell find src -name "*.c")
+ CFLAGS += -DHAVE_CCONFIG_H -D__RTTHREAD__
+ CFLAGS += -Wno-nonnull-compare
++CFLAGS += -I$(abspath ../../components/drivers/include)
+ LDFLAGS += -T extra.ld
+ -include $(FILE_MK)
+ -include $(AM_APPS_MK)
+@@ -16,6 +17,7 @@ include $(AM_HOME)/Makefile
+ $(RTCONFIG_H):
+ 	touch $@
+ 	scons --useconfig=.config
++	python3 -c 'import sys; sys.path.append("../../tools"); import menuconfig; menuconfig.mk_rtconfig(".config")'
+ 	if [ "`sed -n '3p' $@`"x = x ]; then sed -i -e '2a#include "extra.h"' $@; fi
+ 
+ init: $(RTCONFIG_H)
+diff --git a/bsp/abstract-machine/integrate-am-apps.py b/bsp/abstract-machine/integrate-am-apps.py
+index 8968df3..bb86a95 100644
+--- a/bsp/abstract-machine/integrate-am-apps.py
++++ b/bsp/abstract-machine/integrate-am-apps.py
+@@ -11,7 +11,6 @@ app_dir_list = [
+   AM_KERNELS_HOME / "benchmarks" / "microbench",
+   AM_KERNELS_HOME / "kernels" / "typing-game",
+   AM_KERNELS_HOME / "kernels" / "snake",
+-  AM_KERNELS_HOME / ".." / "fceux-am",
+ ]
+ 
+ if len(sys.argv) != 3:
+diff --git a/bsp/abstract-machine/src/context.c b/bsp/abstract-machine/src/context.c
+index ee38829..14f2e60 100644
+--- a/bsp/abstract-machine/src/context.c
++++ b/bsp/abstract-machine/src/context.c
+@@ -1,9 +1,25 @@
+ #include <am.h>
+ #include <klib.h>
++#include <rthw.h>
+ #include <rtthread.h>
+ 
++static volatile rt_ubase_t rt_interrupt_from_thread = 0;
++static volatile rt_ubase_t rt_interrupt_to_thread = 0;
++
+ static Context* ev_handler(Event e, Context *c) {
+   switch (e.event) {
++    case EVENT_YIELD:
++    case EVENT_SYSCALL:
++      if (rt_interrupt_from_thread != 0) {
++        *(rt_ubase_t *)rt_interrupt_from_thread = (rt_ubase_t)c;
++      }
++      if (rt_interrupt_to_thread != 0) {
++        Context *next = (Context *)(*(rt_ubase_t *)rt_interrupt_to_thread);
++        rt_interrupt_from_thread = 0;
++        rt_interrupt_to_thread = 0;
++        return next;
++      }
++      return c;
+     default: printf("Unhandled event ID = %d\n", e.event); assert(0);
+   }
+   return c;
+@@ -14,18 +30,35 @@ void __am_cte_init() {
+ }
+ 
+ void rt_hw_context_switch_to(rt_ubase_t to) {
+-  assert(0);
++  rt_interrupt_from_thread = 0;
++  rt_interrupt_to_thread = to;
++  yield();
+ }
+ 
+ void rt_hw_context_switch(rt_ubase_t from, rt_ubase_t to) {
+-  assert(0);
++  rt_interrupt_from_thread = from;
++  rt_interrupt_to_thread = to;
++  yield();
+ }
+ 
+-void rt_hw_context_switch_interrupt(void *context, rt_ubase_t from, rt_ubase_t to, struct rt_thread *to_thread) {
+-  assert(0);
++void rt_hw_context_switch_interrupt(rt_ubase_t from, rt_ubase_t to, rt_thread_t from_thread, rt_thread_t to_thread) {
++  (void)from_thread;
++  (void)to_thread;
++  rt_interrupt_from_thread = from;
++  rt_interrupt_to_thread = to;
+ }
+ 
+ rt_uint8_t *rt_hw_stack_init(void *tentry, void *parameter, rt_uint8_t *stack_addr, void *texit) {
+-  assert(0);
+-  return NULL;
++  uintptr_t sp = (uintptr_t)stack_addr;
++  sp &= ~(sizeof(uintptr_t) - 1);
++  sp -= sizeof(Context);
++
++  Context *c = (Context *)sp;
++  *c = (Context){0};
++  c->mepc = (uintptr_t)tentry;
++  c->mstatus = 0x1800;
++  c->gpr[1] = (uintptr_t)texit;
++  c->gpr[10] = (uintptr_t)parameter;
++
++  return (rt_uint8_t *)c;
+ }
+-- 
+2.43.0
+

@@ -3,7 +3,7 @@ NXDC_FILES ?=
 INC_PATH ?=
 IMG ?=
 DIFF ?=
-NEMU_HOME ?= $(abspath ../../ics2025/nemu)
+NEMU_HOME ?= $(abspath ../nemu)
 CAPSTONE_HOME ?= $(NEMU_HOME)/tools/capstone/repo
 
 VERILATOR = verilator
